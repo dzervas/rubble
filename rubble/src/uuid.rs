@@ -17,9 +17,7 @@
 use crate::{bytes::*, Error};
 use core::fmt;
 
-pub use uuid::Uuid;
-
-// FIXME the uuid crate should offer a const fn `from_u128`
+// FIXME this could be more readable
 const BASE_UUID: [u8; 16] = [
     0x00, 0x00, 0x00, 0x00, /*-*/ 0x00, 0x00, /*-*/ 0x10, 00, /*-*/ 0x80, 0x00,
     /*-*/ 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB,
@@ -37,23 +35,34 @@ pub struct Uuid16(pub u16);
 #[derive(PartialEq, Eq, Copy, Clone)]
 pub struct Uuid32(pub u32);
 
+/// A full 128-bit UUID.
+#[derive(PartialEq, Eq, Copy, Clone)]
+pub struct Uuid128([u8; 16]);
+
+impl Uuid128 {
+    /// Creates a 128-bit UUID from 16 raw bytes (encoded in big-endian).
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+}
+
 impl From<Uuid16> for Uuid32 {
     fn from(smol: Uuid16) -> Self {
         Uuid32(smol.0.into())
     }
 }
 
-impl Into<Uuid> for Uuid16 {
-    fn into(self) -> Uuid {
-        Uuid32::from(self).into()
+impl From<Uuid16> for Uuid128 {
+    fn from(uuid: Uuid16) -> Self {
+        Uuid32::from(uuid).into()
     }
 }
 
-impl Into<Uuid> for Uuid32 {
-    fn into(self) -> Uuid {
+impl From<Uuid32> for Uuid128 {
+    fn from(uuid: Uuid32) -> Self {
         let mut buf = BASE_UUID;
-        buf[..4].copy_from_slice(&self.0.to_be_bytes());
-        Uuid::from_bytes(buf)
+        buf[..4].copy_from_slice(&uuid.0.to_be_bytes());
+        Uuid128(buf)
     }
 }
 
@@ -69,9 +78,9 @@ impl ToBytes for Uuid32 {
     }
 }
 
-impl ToBytes for Uuid {
+impl ToBytes for Uuid128 {
     fn to_bytes(&self, buffer: &mut ByteWriter<'_>) -> Result<(), Error> {
-        buffer.write_slice(self.as_bytes())
+        buffer.write_slice(&self.0)
     }
 }
 
@@ -89,10 +98,10 @@ impl FromBytes<'_> for Uuid32 {
     }
 }
 
-impl FromBytes<'_> for Uuid {
+impl FromBytes<'_> for Uuid128 {
     fn from_bytes(bytes: &mut ByteReader<'_>) -> Result<Self, Error> {
         let array = bytes.read_array()?;
-        Ok(Uuid::from_bytes(array))
+        Ok(Uuid128(array))
     }
 }
 
@@ -105,6 +114,18 @@ impl fmt::Debug for Uuid16 {
 impl fmt::Debug for Uuid32 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Uuid32({:08x})", self.0)
+    }
+}
+
+impl fmt::Debug for Uuid128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15] = self.0;
+        let a = u32::from_be_bytes([_0, _1, _2, _3]);
+        let b = u16::from_be_bytes([_4, _5]);
+        let c = u16::from_be_bytes([_6, _7]);
+        let d = u16::from_be_bytes([_8, _9]);
+        let e = u64::from_be_bytes([0, 0, _10, _11, _12, _13, _14, _15]);
+        write!(f, "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", a, b, c, d, e)
     }
 }
 
@@ -133,6 +154,36 @@ impl IsUuid for Uuid32 {
     const KIND: UuidKind = UuidKind::Uuid32;
 }
 
-impl IsUuid for Uuid {
+impl IsUuid for Uuid128 {
     const KIND: UuidKind = UuidKind::Uuid128;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmt() {
+        // Check that all leading 0s are printed.
+        let uuid = Uuid128::from_bytes([
+            0x02, 0x3e, 0x45, 0x67, 0x08, 0x9b, 0x02, 0xd3, 0x04, 0x56, 0x00, 0x66, 0x14, 0x17,
+            0x40, 0x00,
+        ]);
+
+        assert_eq!(
+            format!("{:?}", uuid),
+            "023e4567-089b-02d3-0456-006614174000"
+        );
+    }
+
+    #[test]
+    fn convert() {
+        let uuid = 0xfd6f; // Apple Inc. / Exposure Notification Service
+        let uuid = Uuid128::from(Uuid16(uuid));
+
+        assert_eq!(
+            format!("{:?}", uuid),
+            "0000fd6f-0000-1000-8000-00805f9b34fb"
+        );
+    }
 }
